@@ -8,6 +8,8 @@ datasets = "*"
 transformers = "*"
 evaluate = "*"
 scikit-learn = "*"
+wandb = "*"
+seqeval = "*"
 
 [dev-packages]
 pylint="*"

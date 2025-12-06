@@ -1,6 +1,7 @@
 "Training code for encoder models"
 
 import argparse
+import os
 
 import numpy as np
 from sklearn.model_selection import KFold
@@ -55,6 +56,12 @@ def train_model(model_name: str, data_dir: str = "all"):
         model = AutoModelForTokenClassification.from_pretrained(
             model_name, num_labels=len(label2idx)
         )
+        # set the wandb project where this run will be logged
+        os.environ["WANDB_PROJECT"]="test-project"
+
+        os.environ["WANDB_LOG_MODEL"]="checkpoint"
+
+        os.environ["WANDB_WATCH"]="false"
 
         training_args = TrainingArguments(
             output_dir=f"./results_{model_name.replace('/', '_')}_fold{fold}",
@@ -68,6 +75,7 @@ def train_model(model_name: str, data_dir: str = "all"):
             num_train_epochs=NUM_EPOCHS,
             weight_decay=0.01,
             save_total_limit=2,
+            report_to="wandb",
         )
 
         trainer = Trainer(
@@ -102,6 +110,7 @@ def train_model(model_name: str, data_dir: str = "all"):
         num_train_epochs=NUM_EPOCHS,
         weight_decay=0.01,
         save_total_limit=2,
+        report_to="wandb"
     )
 
     final_trainer = Trainer(
