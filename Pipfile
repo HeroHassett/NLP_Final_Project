@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+datasets = "*"
+transformers = "*"
+evaluate = "*"
+scikit-learn = "*"
+wandb = "*"
+seqeval = "*"
+
+[dev-packages]
+pylint="*"
+black="*"
+
+[requires]
+python_version = "3.13"
