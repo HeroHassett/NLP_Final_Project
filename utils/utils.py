@@ -5,6 +5,7 @@ import numpy as np
 import requests
 import time
 import warnings
+from pathlib import Path
 from datasets import ClassLabel, Sequence, load_dataset
 from transformers import AutoTokenizer
 from typing import List, Sequence as SeqType, Dict, Any
@@ -38,13 +39,28 @@ def load_rate_ner_dataset(directory="all", ner_type="IOB"):
     except Exception as e:
         raise e
 
-    data_files = {
-        "train": f"{directory}/train_{ner_type}.json",
-        "validation": f"{directory}/dev_{ner_type}.json",
-        "test": f"{directory}/test_{ner_type}.json",
+    # Prefer local shard files if they exist; otherwise fall back to hosted RaTE-NER
+    dir_path = Path(directory)
+    candidate_files = {
+        "train": dir_path / f"train_{ner_type}.json",
+        "validation": dir_path / f"dev_{ner_type}.json",
+        "test": dir_path / f"test_{ner_type}.json",
     }
+    dataset = None
 
-    dataset = load_dataset("Angelakeke/RaTE-NER", data_files=data_files)
+    if all(p.exists() for p in candidate_files.values()):
+        data_files = {split: str(path) for split, path in candidate_files.items()}
+        dataset = load_dataset("json", data_files=data_files)
+
+    # Fallback to remote hosted files via HTTPS if local shards are missing
+    if dataset is None:
+        base_url = "https://huggingface.co/datasets/Angelakeke/RaTE-NER/resolve/main"
+        data_files = {
+            "train": f"{base_url}/{directory}/train_{ner_type}.json",
+            "validation": f"{base_url}/{directory}/dev_{ner_type}.json",
+            "test": f"{base_url}/{directory}/test_{ner_type}.json",
+        }
+        dataset = load_dataset("json", data_files=data_files)
 
     # Convert ner_tags to Sequence(ClassLabel)
     if label2idx and idx2label:
@@ -98,8 +114,17 @@ def tokenize_and_align_labels(examples, tokenizer: AutoTokenizer, label2idx: dic
 
 metric = evaluate.load("seqeval")
 
-def compute_metrics(p, idx2label: dict):
-    logits, labels_batch = p
+def compute_metrics(predictions_obj, idx2label: dict):
+    """
+    Compute seqeval metrics from a HF Trainer eval prediction or a (logits, labels) tuple.
+    Supports both the EvalPrediction object and raw tuple for compatibility.
+    """
+    if hasattr(predictions_obj, "predictions") and hasattr(predictions_obj, "label_ids"):
+        logits = predictions_obj.predictions
+        labels_batch = predictions_obj.label_ids
+    else:
+        logits, labels_batch = predictions_obj
+
     predictions = np.argmax(logits, axis=-1)
 
     # id → label string

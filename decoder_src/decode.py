@@ -4,10 +4,17 @@ import argparse
 import json
 import os
 import time
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Ensure repo root is on sys.path for `utils` imports when run as a script
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from utils.utils import (
     ResourceTracker,
@@ -20,6 +27,12 @@ try:
 except Exception:  # pragma: no cover - optional dependency at import time
     wandb = None
 
+# Default checkpoint (open Llama 3.1 Instruct); Llama 4 stays available if you have access
+DEFAULT_DECODER_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+LLAMA4_DECODER_MODEL = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+DEFAULT_WANDB_PROJECT = "NLP-Final-Project"
+
+# Hugging Face token is read from CLI arg or env (HUGGING_FACE_HUB_TOKEN); not hard-coded.
 
 def _format_prompt(tokens: Sequence[str], allowed_labels: Sequence[str]) -> str:
     token_block = "\n".join(f"{i+1}. {tok}" for i, tok in enumerate(tokens))
@@ -89,14 +102,20 @@ class PromptDecoder:
         temperature: float = 0.0,
         top_p: float = 1.0,
         device: str | None = None,
+        hf_token: str | None = None,
     ):
         self.allowed_labels = list(allowed_labels)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.top_p = top_p
+        self.hf_token = hf_token or os.getenv("HUGGING_FACE_HUB_TOKEN")
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            token=self.hf_token,
+            use_auth_token=self.hf_token,
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         if self.tokenizer.padding_side != "left":
@@ -106,6 +125,8 @@ class PromptDecoder:
             model_name,
             torch_dtype=torch.bfloat16 if torch.cuda.is_available() else None,
             device_map="auto" if self.device == "cuda" else None,
+            token=self.hf_token,
+            use_auth_token=self.hf_token,
         )
         if self.device != "cuda":
             self.model.to(self.device)
@@ -180,6 +201,7 @@ def run_decoder(args: argparse.Namespace):
         temperature=args.temperature,
         top_p=args.top_p,
         device=args.device,
+        hf_token=args.hf_token,
     )
 
     tracker = ResourceTracker()
@@ -246,11 +268,21 @@ def run_decoder(args: argparse.Namespace):
         print(f"Saved generations to {args.save_predictions}")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prompted decoder inference for RaTE-NER")
-    parser.add_argument("--model_name", type=str, required=True, help="Decoder model name (e.g., meta-llama/Llama-3-8b-instruct)")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default=DEFAULT_DECODER_MODEL,
+        help=f"Decoder model name (default: {DEFAULT_DECODER_MODEL})",
+    )
     parser.add_argument("--split", type=str, default="test", choices=["train", "validation", "test"], help="Dataset split to evaluate")
-    parser.add_argument("--data_dir", type=str, default="all", help="Directory of RaTE-NER dataset shards")
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        default="all",
+        help="Directory of RaTE-NER dataset shards. If files are absent, falls back to hosted dataset.",
+    )
     parser.add_argument("--ner_type", type=str, default="IOB", help="NER tag type (matches dataset files)")
     parser.add_argument("--max_samples", type=int, default=None, help="Limit number of samples for quick runs")
     parser.add_argument("--max_new_tokens", type=int, default=128, help="Decoder max new tokens")
@@ -258,9 +290,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling parameter")
     parser.add_argument("--device", type=str, default=None, help="Force device (e.g., cuda, cpu). Defaults to auto")
     parser.add_argument("--save_predictions", type=str, default="decoder_outputs/predictions.jsonl", help="Path to save raw generations")
-    parser.add_argument("--wandb_project", type=str, default=None, help="W&B project name for logging")
+    parser.add_argument("--wandb_project", type=str, default=DEFAULT_WANDB_PROJECT, help="W&B project name for logging")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="Optional W&B run name")
-    return parser.parse_args()
+    parser.add_argument("--hf_token", type=str, default=None, help="Hugging Face token (else read from HUGGING_FACE_HUB_TOKEN)")
+    return parser.parse_args(args=arg_list)
 
 
 if __name__ == "__main__":
