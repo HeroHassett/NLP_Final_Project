@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Sequence
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from tqdm.auto import tqdm
+
 
 # Ensure repo root is on sys.path for `utils` imports when run as a script
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -21,6 +23,9 @@ from utils.utils import (
     compute_tag_metrics,
     load_rate_ner_dataset,
 )
+import certifi
+
+os.environ['SSL_CERT_FILE'] = certifi.where()
 
 try:
     import wandb
@@ -119,7 +124,6 @@ class PromptDecoder:
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             token=self.hf_token,
-            use_auth_token=self.hf_token,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -131,7 +135,6 @@ class PromptDecoder:
             dtype=torch.bfloat16 if torch.cuda.is_available() else None,
             device_map="auto" if self.device == "cuda" else None,
             token=self.hf_token,
-            use_auth_token=self.hf_token,
         )
         if self.device != "cuda":
             self.model.to(self.device)
@@ -177,12 +180,12 @@ def _init_wandb(args: argparse.Namespace, label_set: Sequence[str]):
         return None
     run = wandb.init(
         project=args.wandb_project,
+        dir='/scratch/akh7067/NLP_Final_Project_Wandb',
         name=args.wandb_run_name,
         config={
             "model_name": args.model_name,
             "split": args.split,
             "max_new_tokens": args.max_new_tokens,
-            "temperature": args.temperature,
             "top_p": args.top_p,
             "label_set": list(label_set),
             "max_samples": args.max_samples,
@@ -215,8 +218,10 @@ def run_decoder(args: argparse.Namespace):
     predictions: List[List[str]] = []
     references: List[List[str]] = []
     generations: List[Dict[str, Any]] = []
+    prompt_token_total = 0
+    gen_token_total = 0
 
-    for example in split_data:
+    for idx, example in enumerate(tqdm(split_data, desc="Decoding", total=len(split_data))):
         tokens = example["tokens"]
         gold_labels = _prepare_references(idx2label, example["ner_tags"])
 
@@ -233,6 +238,8 @@ def run_decoder(args: argparse.Namespace):
 
         predictions.append(pred_tags)
         references.append(gold_labels)
+        prompt_token_total += output.get("prompt_tokens", 0)
+        gen_token_total += output.get("generated_tokens", 0)
         generations.append(
             {
                 "tokens": tokens,
@@ -247,10 +254,25 @@ def run_decoder(args: argparse.Namespace):
             samples=1,
             tokens=len(tokens) + output.get("generated_tokens", 0),
         )
+        
+        if wb_run:
+            wandb.log(
+                {
+                    "sample_idx": idx,
+                    "latency_s": latency,
+                    "prompt_tokens": output.get("prompt_tokens", 0),
+                    "generated_tokens": output.get("generated_tokens", 0),
+                },
+                step=idx,
+            )
 
     metrics = compute_tag_metrics(predictions, references)
     resource_stats = tracker.summary()
     tracker.close()
+    
+    sample_count = len(predictions)
+    avg_prompt_tokens = prompt_token_total / sample_count if sample_count else 0
+    avg_generated_tokens = gen_token_total / sample_count if sample_count else 0
 
     print(f"Split: {args.split} | Samples: {len(predictions)}")
     print(f"Precision: {metrics['precision']:.4f}")
@@ -258,9 +280,19 @@ def run_decoder(args: argparse.Namespace):
     print(f"Micro F1: {metrics['micro_f1']:.4f}")
     print(f"Accuracy: {metrics['accuracy']:.4f}")
     print(f"Resource stats: {resource_stats}")
+    print(f"Avg prompt tokens: {avg_prompt_tokens:.1f} | Avg generated tokens: {avg_generated_tokens:.1f}")
 
     if wb_run:
-        wandb.log({**metrics, **resource_stats, "num_samples": len(predictions)})
+        wandb.log(
+            {
+                **metrics,
+                **resource_stats,
+                "num_samples": sample_count,
+                "avg_prompt_tokens": avg_prompt_tokens,
+                "avg_generated_tokens": avg_generated_tokens,
+                "total_generated_tokens": gen_token_total,
+            }
+        )
         wb_run.finish()
 
     if args.save_predictions:

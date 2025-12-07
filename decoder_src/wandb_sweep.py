@@ -5,6 +5,13 @@ from types import SimpleNamespace
 from typing import Sequence
 
 import wandb
+import sys
+from pathlib import Path
+
+# Ensure repo root on path for local imports when running as a script
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from decoder_src.decode import (
     DEFAULT_DECODER_MODEL,
@@ -50,10 +57,17 @@ def main():
     parser.add_argument("--max_new_tokens_values", nargs="+", type=int, default=[96, 128, 160])
     parser.add_argument("--model_name", type=str, default=DEFAULT_DECODER_MODEL)
     parser.add_argument("--data_dir", type=str, default="all")
+    parser.add_argument("--ner_type", type=str, default="IOB")
     parser.add_argument("--split", type=str, default="validation", choices=["train", "validation", "test"])
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--max_samples", type=int, default=None, help="Optional cap per run (useful for quick sweeps)")
+    parser.add_argument(
+        "--save_predictions_dir",
+        type=str,
+        default=None,
+        help="Optional directory to write per-run predictions; if unset, predictions are not saved during sweeps.",
+    )
     args = parser.parse_args()
 
     sweep_config = build_sweep_config(
@@ -70,10 +84,16 @@ def main():
         run = wandb.init(project=args.project, entity=args.entity)
         cfg = run.config
 
+        save_path = None
+        if args.save_predictions_dir:
+            os.makedirs(args.save_predictions_dir, exist_ok=True)
+            save_path = os.path.join(args.save_predictions_dir, f"{args.sweep_name}_{run.id}.jsonl")
+
         decoded_args = _base_args(
             {
                 "model_name": args.model_name,
                 "data_dir": args.data_dir,
+                "ner_type": args.ner_type,
                 "split": args.split,
                 "device": args.device,
                 "hf_token": args.hf_token,
@@ -83,6 +103,7 @@ def main():
                 "temperature": cfg.get("temperature", 0.0),
                 "top_p": cfg.get("top_p", 1.0),
                 "max_new_tokens": cfg.get("max_new_tokens", 128),
+                "save_predictions": save_path,
             }
         )
         run_decoder(decoded_args)
