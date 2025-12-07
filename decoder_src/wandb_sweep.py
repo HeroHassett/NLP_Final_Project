@@ -3,6 +3,9 @@
 import argparse
 from types import SimpleNamespace
 from typing import Sequence
+import certifi
+
+os.environ['SSL_CERT_FILE'] = certifi.where()
 
 import wandb
 import sys
@@ -60,6 +63,7 @@ def main():
     parser.add_argument("--ner_type", type=str, default="IOB")
     parser.add_argument("--split", type=str, default="validation", choices=["train", "validation", "test"])
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--max_samples", type=int, default=None, help="Optional cap per run (useful for quick sweeps)")
     parser.add_argument(
@@ -81,7 +85,7 @@ def main():
     print(f"Created sweep: {sweep_id}")
 
     def _run():
-        run = wandb.init(project=args.project, entity=args.entity)
+        run = wandb.init(project=args.project, entity=args.entity, dir='/scratch/akh7067/NLP_Final_Project_Wandb')
         cfg = run.config
 
         save_path = None
@@ -96,6 +100,7 @@ def main():
                 "ner_type": args.ner_type,
                 "split": args.split,
                 "device": args.device,
+                "batch_size": args.batch_size,
                 "hf_token": args.hf_token,
                 "wandb_project": args.project,
                 "wandb_run_name": f"{args.sweep_name}-{run.id}",

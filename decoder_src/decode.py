@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Sequence
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from tqdm.auto import tqdm
 
 
 # Ensure repo root is on sys.path for `utils` imports when run as a script
@@ -221,49 +220,90 @@ def run_decoder(args: argparse.Namespace):
     prompt_token_total = 0
     gen_token_total = 0
 
-    for idx, example in enumerate(tqdm(split_data, desc="Decoding", total=len(split_data))):
-        tokens = example["tokens"]
-        gold_labels = _prepare_references(idx2label, example["ner_tags"])
+    num_samples = len(split_data)
+    batch_size = max(1, args.batch_size)
+
+    for start_idx in range(0, num_samples, batch_size):
+        end_idx = min(start_idx + batch_size, num_samples)
+        batch = split_data.select(range(start_idx, end_idx))
+
+        tokens_batch = batch["tokens"]
+        gold_batch = [_prepare_references(idx2label, tags) for tags in batch["ner_tags"]]
+        prompts = [_format_prompt(tokens, allowed_labels) for tokens in tokens_batch]
+
+        enc = decoder.tokenizer(prompts, return_tensors="pt", padding=True)
+        enc = {k: v.to(decoder.model.device) for k, v in enc.items()}
 
         start = time.time()
-        output = decoder.generate_tags(tokens)
+        with torch.no_grad():
+            output_ids = decoder.model.generate(
+                input_ids=enc["input_ids"],
+                attention_mask=enc.get("attention_mask"),
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                do_sample=args.temperature > 0,
+                pad_token_id=decoder.tokenizer.eos_token_id,
+                eos_token_id=decoder.tokenizer.eos_token_id,
+            )
         latency = time.time() - start
 
-        pred_tags = output["tags"]
-        # Ensure length match
-        if len(pred_tags) < len(gold_labels):
-            pred_tags += ["O"] * (len(gold_labels) - len(pred_tags))
-        elif len(pred_tags) > len(gold_labels):
-            pred_tags = pred_tags[: len(gold_labels)]
+        attn = enc.get("attention_mask")
+        input_lengths = (
+            attn.sum(dim=1).tolist()
+            if attn is not None
+            else [enc["input_ids"].shape[1]] * (end_idx - start_idx)
+        )
 
-        predictions.append(pred_tags)
-        references.append(gold_labels)
-        prompt_token_total += output.get("prompt_tokens", 0)
-        gen_token_total += output.get("generated_tokens", 0)
-        generations.append(
-            {
-                "tokens": tokens,
-                "gold": gold_labels,
-                "pred": pred_tags,
-                "raw_generation": output["raw_generation"],
-            }
+        for b_idx, gold_labels in enumerate(gold_batch):
+            gen_ids = output_ids[b_idx][input_lengths[b_idx] :]
+            decoded = decoder.tokenizer.decode(gen_ids, skip_special_tokens=True)
+            pred_tags = _parse_tag_response(decoded, len(gold_labels), allowed_labels)
+
+            if len(pred_tags) < len(gold_labels):
+                pred_tags += ["O"] * (len(gold_labels) - len(pred_tags))
+            elif len(pred_tags) > len(gold_labels):
+                pred_tags = pred_tags[: len(gold_labels)]
+
+            predictions.append(pred_tags)
+            references.append(gold_labels)
+
+            prompt_tokens = input_lengths[b_idx]
+            gen_tokens = gen_ids.shape[0]
+            prompt_token_total += prompt_tokens
+            gen_token_total += gen_tokens
+
+            generations.append(
+                {
+                    "tokens": tokens_batch[b_idx],
+                    "gold": gold_labels,
+                    "pred": pred_tags,
+                    "raw_generation": decoded,
+                }
+            )
+
+        batch_prompt_tokens = sum(input_lengths)
+        batch_gen_tokens = sum(
+            output_ids[b_idx][input_lengths[b_idx] :].shape[0]
+            for b_idx in range(len(input_lengths))
         )
 
         tracker.record_step(
             latency_s=latency,
-            samples=1,
-            tokens=len(tokens) + output.get("generated_tokens", 0),
+            samples=end_idx - start_idx,
+            tokens=batch_prompt_tokens + batch_gen_tokens,
         )
-        
+
         if wb_run:
             wandb.log(
                 {
-                    "sample_idx": idx,
-                    "latency_s": latency,
-                    "prompt_tokens": output.get("prompt_tokens", 0),
-                    "generated_tokens": output.get("generated_tokens", 0),
+                    "batch_start_idx": start_idx,
+                    "batch_size": end_idx - start_idx,
+                    "batch_latency_s": latency,
+                    "batch_prompt_tokens": batch_prompt_tokens,
+                    "batch_generated_tokens": batch_gen_tokens,
                 },
-                step=idx,
+                step=start_idx,
             )
 
     metrics = compute_tag_metrics(predictions, references)
@@ -325,6 +365,7 @@ def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max_new_tokens", type=int, default=128, help="Decoder max new tokens")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (0 for greedy)")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling parameter")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size for batched prompting/inference")
     parser.add_argument("--device", type=str, default=None, help="Force device (e.g., cuda, cpu). Defaults to auto")
     parser.add_argument("--save_predictions", type=str, default="decoder_outputs/predictions.jsonl", help="Path to save raw generations")
     parser.add_argument("--wandb_project", type=str, default=DEFAULT_WANDB_PROJECT, help="W&B project name for logging")
