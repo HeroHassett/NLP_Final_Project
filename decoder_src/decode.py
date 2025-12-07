@@ -110,6 +110,11 @@ class PromptDecoder:
         self.temperature = temperature
         self.top_p = top_p
         self.hf_token = hf_token or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        if ("llama" in model_name.lower()) and not self.hf_token:
+            raise RuntimeError(
+                "Hugging Face token required for gated Llama checkpoints. "
+                "Pass --hf_token or set HUGGING_FACE_HUB_TOKEN."
+            )
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
@@ -123,7 +128,7 @@ class PromptDecoder:
 
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else None,
+            dtype=torch.bfloat16 if torch.cuda.is_available() else None,
             device_map="auto" if self.device == "cuda" else None,
             token=self.hf_token,
             use_auth_token=self.hf_token,
