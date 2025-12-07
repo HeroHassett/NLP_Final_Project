@@ -13,3 +13,15 @@ You  may  use five-fold cross validation (CV) on the training and development da
 You may also measure and compare resource usage among systems (GPU, CPU usage, power (watts), etc.
 
 You will also do some error analysis, e.g., using a confusion matrix.
+
+
+# Instructions for running batch-based decoder inference
+Command: python decode.py --model_name meta-llama/Llama-4-Scout-17B-16E-Instruct --wandb_project (project name) --batch_size (desired batch size) --hf_token (insert your token)
+
+You can alter batch size and wandb_project
+Also you should go into the decode.py file and go to the wandb.init command on line 180 and change the dir param to whatever you prefer
+
+# Instructions for running the sweep
+Command: python wandb_sweep.py --model_name meta-llama/Llama-4-Scout-17B-16E-Instruct --project (wandb project name) --sweep_name llama4-decoder-sweep --count 10 --data_dir all --split validation --batch_size (whatever you want) --save_predictions_dir decoder_outputs/sweep_preds --hf_token (insert your hugging face token)
+
+Go to line 88 of the sweep and alter the dir param of the wandb.init command to whatever you want
