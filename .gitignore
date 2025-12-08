@@ -185,3 +185,4 @@ slurm*/
 wandb/
 run_experiment.sh
 train.py
+.DS_Store
