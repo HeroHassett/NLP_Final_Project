@@ -1,5 +1,5 @@
 # NLP_Final_Project
-This is the final project for group 32 in NLP. 
+This is the final project for group 33 in NLP. 
 
 # Instructions given by prof
 You propose to create an evaluation system for clinical named entity recognition (NER) and use this system to evaluate the output of clinical NER systems. You plan to use the RaTE-NER dataset (radiology NER) for evaluation.
